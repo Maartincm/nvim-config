@@ -22,7 +22,7 @@ return {
       winbar = true,
       statusline = false,
     },
-    close_if_last_window = true,
+    close_if_last_window = false,
     window = {
       mappings = {
         ['o'] = 'open',

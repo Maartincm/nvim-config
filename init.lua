@@ -98,6 +98,10 @@ vim.g.have_nerd_font = true
 -- NOTE: You can change these options as you wish!
 --  For more options, you can see `:help option-list`
 
+-- Specify the Python binaries to speed up startup
+vim.g.python3_host_prog = vim.fn.system 'which python'
+-- vim.g.python_host_prog = '/usr/bin/python2'
+
 -- Make line numbers default
 vim.o.number = true
 -- You can also add relative line numbers, to help with jumping.
@@ -121,7 +125,7 @@ vim.o.breakindent = true
 
 -- Enable undo/redo changes even after closing and reopening a file
 vim.o.undofile = true
-vim.o.undodir = vim.env.HOME .. '/.vim/undodir'
+-- vim.o.undodir = vim.env.HOME .. '/.vim/undodir'
 
 -- Case-insensitive searching UNLESS \C or one or more capital letters in the search term
 vim.o.ignorecase = true
@@ -181,14 +185,37 @@ vim.diagnostic.config {
   underline = { severity = { min = vim.diagnostic.severity.WARN } },
 
   -- Can switch between these as you prefer
-  virtual_text = true, -- Text shows up at the end of the line
+  virtual_text = false, -- Text shows up at the end of the line
   virtual_lines = false, -- Text shows up underneath the line, with virtual lines
 
   -- Auto open the float, so you can easily read the errors when jumping with `[d` and `]d`
   jump = { float = true },
 }
 
-vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
+local function open_diagnostics_quickfix()
+  vim.diagnostic.setloclist {
+    severity = vim.diagnostic.severity.ERROR,
+  }
+end
+vim.keymap.set('n', '<leader>Q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
+vim.keymap.set('n', '<leader>q', open_diagnostics_quickfix, { desc = 'Open diagnostic [Q]uickfix list (error only)' })
+
+-- Autocmd to automatically jump to the location list entry on cursor movement within the loclist
+vim.api.nvim_create_autocmd('CursorMoved', {
+  group = vim.api.nvim_create_augroup('LocListJump', { clear = true }),
+  callback = function()
+    local current_win_id = vim.api.nvim_get_current_win()
+    for _, win_info in pairs(vim.fn.getwininfo()) do
+      if win_info.winid == current_win_id then
+        if win_info.quickfix == 1 then
+          vim.cmd('ll ' .. vim.fn.line '.')
+          vim.cmd 'wincmd p'
+        end
+      end
+    end
+  end,
+  desc = 'Jump to location list entry on cursor movement',
+})
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
 -- for people to discover. Otherwise, you normally need to press <C-\><C-n>, which
@@ -349,6 +376,12 @@ require('lazy').setup({
     enabled = true,
     event = 'VimEnter',
     dependencies = {
+      {
+        'nvim-telescope/telescope-live-grep-args.nvim',
+        -- This will not install any breaking changes.
+        -- For major updates, this must be adjusted manually.
+        version = '^1.0.0',
+      },
       'nvim-lua/plenary.nvim',
       { -- If encountering errors, see telescope-fzf-native README for installation instructions
         'nvim-telescope/telescope-fzf-native.nvim',
@@ -386,6 +419,32 @@ require('lazy').setup({
       -- Telescope picker. This is really useful to discover what Telescope can
       -- do as well as how to actually do it!
 
+      local actions = require 'telescope.actions'
+      local picker_up_one_level = function(telescope_function_name, prompt_bufnr)
+        local current_picker = require('telescope.actions.state').get_current_picker(prompt_bufnr)
+        -- cwd is only set if passed as telescope option
+        local cwd = current_picker.cwd and tostring(current_picker.cwd) or vim.loop.cwd()
+        local parent_dir = vim.fs.dirname(cwd)
+
+        require('telescope.actions').close(prompt_bufnr)
+        require('telescope.builtin')[telescope_function_name] {
+          prompt_title = string.format('%s [%s]', telescope_function_name, vim.fs.abspath(parent_dir)),
+          cwd = parent_dir,
+        }
+      end
+
+      local picker_up_one_level_args = function(telescope_function_name, prompt_bufnr)
+        local current_picker = require('telescope.actions.state').get_current_picker(prompt_bufnr)
+        -- cwd is only set if passed as telescope option
+        local cwd = current_picker.cwd and tostring(current_picker.cwd) or vim.loop.cwd()
+        local parent_dir = vim.fs.dirname(cwd)
+
+        require('telescope.actions').close(prompt_bufnr)
+        require('telescope').extensions.live_grep_args.live_grep_args {
+          prompt_title = string.format('%s [%s]', telescope_function_name, vim.fs.abspath(parent_dir)),
+          cwd = parent_dir,
+        }
+      end
       -- [[ Configure Telescope ]]
       -- See `:help telescope` and `:help telescope.setup()`
       require('telescope').setup {
@@ -397,24 +456,91 @@ require('lazy').setup({
         --     i = { ['<c-enter>'] = 'to_fuzzy_refine' },
         --   },
         -- },
-        -- pickers = {}
+        defaults = {
+          mappings = {
+            n = {
+              -- In normal mode, q sends all results to quickfix and opens it
+              ['q'] = require('telescope.actions').send_to_qflist + require('telescope.actions').open_qflist,
+              ['<C-a>'] = actions.toggle_all,
+            },
+            i = {
+              ['<C-a>'] = actions.toggle_all,
+            },
+          },
+        },
+        pickers = {
+          find_files = {
+            mappings = {
+              i = {
+                ['<c-f>'] = actions.to_fuzzy_refine,
+                ['<C-u>'] = function(prompt_bufnr) picker_up_one_level('find_files', prompt_bufnr) end,
+              },
+            },
+          },
+          live_grep = {
+            mappings = {
+              i = {
+                ['<c-f>'] = actions.to_fuzzy_refine,
+                ['<C-u>'] = function(prompt_bufnr) picker_up_one_level('live_grep', prompt_bufnr) end,
+              },
+            },
+          },
+          grep_string = {
+            mappings = {
+              i = {
+                ['<c-f>'] = actions.to_fuzzy_refine,
+                ['<C-u>'] = function(prompt_bufnr) picker_up_one_level('grep_string', prompt_bufnr) end,
+              },
+            },
+          },
+        },
         extensions = {
           ['ui-select'] = { require('telescope.themes').get_dropdown() },
+          live_grep_args = {
+            mappings = {
+              i = {
+                ['<c-f>'] = actions.to_fuzzy_refine,
+                ['<C-u>'] = function(prompt_bufnr) picker_up_one_level_args('live_grep_args', prompt_bufnr) end,
+              },
+            },
+          },
         },
       }
 
       -- Enable Telescope extensions if they are installed
       pcall(require('telescope').load_extension, 'fzf')
       pcall(require('telescope').load_extension, 'ui-select')
-
+      require('telescope').load_extension 'live_grep_args'
       -- See `:help telescope.builtin`
       local builtin = require 'telescope.builtin'
+      local function find_project_files()
+        builtin.find_files {
+          prompt_title = 'find_files [' .. vim.fs.abspath(vim.fn.getcwd()) .. ']',
+        }
+      end
+      local function grep_project_files()
+        builtin.live_grep {
+          prompt_title = 'live_grep [' .. vim.fs.abspath(vim.fn.getcwd()) .. ']',
+        }
+      end
+      local function grep_args_project_files()
+        require('telescope').extensions.live_grep_args.live_grep_args {
+          prompt_title = 'live_grep_args [' .. vim.fs.abspath(vim.fn.getcwd()) .. ']',
+        }
+      end
+      local function grep_string_project_files()
+        builtin.grep_string {
+          prompt_title = 'grep_string [' .. vim.fs.abspath(vim.fn.getcwd()) .. ']',
+        }
+      end
+
       vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
-      vim.keymap.set('n', '<leader>sf', builtin.find_files, { desc = '[S]earch [F]iles' })
+      vim.keymap.set('n', '<leader>sf', find_project_files, { desc = '[S]earch [F]iles' })
       vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
-      vim.keymap.set({ 'n', 'v' }, '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
-      vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
+      vim.keymap.set({ 'n', 'v' }, '<leader>sw', grep_string_project_files, { desc = '[S]earch current [W]ord' })
+      vim.keymap.set('n', '<leader>sG', grep_args_project_files, { desc = '[S]earch by [G]rep' })
+      vim.keymap.set('n', '<leader>sg', grep_project_files, { desc = '[S]earch by [G]rep' })
       vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
@@ -684,12 +810,12 @@ require('lazy').setup({
     },
     ---@module 'conform'
     opts = {
-      notify_on_error = false,
+      notify_on_error = true,
       format_on_save = function(bufnr)
         -- Disable "format_on_save lsp_fallback" for languages that don't
         -- have a well standardized coding style. You can add additional
         -- languages here or re-enable it for the disabled ones.
-        local disable_filetypes = { c = true, cpp = true }
+        local disable_filetypes = { c = true, cpp = true, python = true }
         if disable_filetypes[vim.bo[bufnr].filetype] then
           return nil
         else
@@ -701,6 +827,7 @@ require('lazy').setup({
       end,
       formatters_by_ft = {
         lua = { 'stylua' },
+        python = { 'ruff_fix', 'ruff_format', 'ruff_organize_imports' },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
@@ -852,7 +979,19 @@ require('lazy').setup({
       -- - saiw) - [S]urround [A]dd [I]nner [W]ord [)]Paren
       -- - sd'   - [S]urround [D]elete [']quotes
       -- - sr)'  - [S]urround [R]eplace [)] [']
-      -- require('mini.surround').setup()
+      vim.keymap.set('n', 'S', '<Nop>', { silent = true })
+      vim.keymap.set('v', 'S', '<Nop>', { silent = true })
+      require('mini.surround').setup {
+        mappings = {
+          add = 'Sa', -- Add surrounding in Normal and Visual modes
+          delete = 'Sd', -- Delete surrounding
+          find = 'Sf', -- Find surrounding (to the right)
+          find_left = 'SF', -- Find surrounding (to the left)
+          highlight = 'Sh', -- Highlight surrounding
+          replace = 'Sr', -- Replace surrounding
+          update_n_lines = 'Sn', -- Update `n_lines`
+        },
+      }
       require('mini.tabline').setup()
       require('mini.trailspace').setup()
 
@@ -861,7 +1000,36 @@ require('lazy').setup({
       --  and try some other statusline plugin
       local statusline = require 'mini.statusline'
       -- set use_icons to true if you have a Nerd Font
-      statusline.setup { use_icons = vim.g.have_nerd_font }
+      statusline.setup {
+        use_icons = vim.g.have_nerd_font,
+        content = {
+          active = function()
+            local mode, mode_hl = MiniStatusline.section_mode { trunc_width = 120 }
+            local git = MiniStatusline.section_git { trunc_width = 40 }
+            local diff = MiniStatusline.section_diff { trunc_width = 75 }
+            local diagnostics = MiniStatusline.section_diagnostics { trunc_width = 75 }
+            local lsp = MiniStatusline.section_lsp { trunc_width = 75 }
+            local venv = vim.env.VIRTUAL_ENV
+            local venv_string = ''
+            if venv then venv_string = '(' .. vim.fs.basename(vim.fs.dirname(venv)) .. ')' end
+            local filename = MiniStatusline.section_filename { trunc_width = 140 }
+            local fileinfo = MiniStatusline.section_fileinfo { trunc_width = 120 }
+            local tab_info = string.format('ts=%s|sw=%s', vim.o.tabstop, vim.o.shiftwidth)
+            local location = MiniStatusline.section_location { trunc_width = 75 }
+            local search = MiniStatusline.section_searchcount { trunc_width = 75 }
+
+            return MiniStatusline.combine_groups {
+              { hl = mode_hl, strings = { mode } },
+              { hl = 'MiniStatuslineDevinfo', strings = { git, diff, diagnostics, lsp } },
+              '%<', -- Mark general truncate point
+              { hl = 'MiniStatuslineFilename', strings = { venv_string, filename } },
+              '%=', -- End left alignment
+              { hl = 'MiniStatuslineFileinfo', strings = { fileinfo, tab_info } },
+              { hl = mode_hl, strings = { search, location } },
+            }
+          end,
+        },
+      }
 
       -- You can configure sections in the statusline by overriding their
       -- default behavior. For example, here we set the section for
@@ -957,6 +1125,8 @@ require('lazy').setup({
     },
   },
 })
+
+vim.cmd 'runtime! lua/custom/config/*.lua'
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
