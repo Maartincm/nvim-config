@@ -192,12 +192,34 @@ vim.diagnostic.config {
   jump = { float = true },
 }
 
-local function open_diagnostics_quickfix()
-  vim.diagnostic.setloclist {
-    severity = vim.diagnostic.severity.ERROR,
-  }
+local function close_loc_list_if_open()
+  local wininfo = vim.fn.getwininfo()
+  local loclist_open = false
+
+  -- Check if any window is a location list or quickfix
+  for _, win in pairs(wininfo) do
+    if win.loclist == 1 or win.quickfix == 1 then
+      loclist_open = true
+      break
+    end
+  end
+
+  if loclist_open then
+    vim.cmd 'lclose'
+    vim.cmd 'cclose'
+  end
+  return loclist_open
 end
-vim.keymap.set('n', '<leader>Q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
+
+local function open_diagnostics_quickfix_error_only()
+  if not close_loc_list_if_open() then vim.diagnostic.setloclist {
+    severity = vim.diagnostic.severity.ERROR,
+  } end
+end
+local function open_diagnostics_quickfix()
+  if not close_loc_list_if_open() then vim.diagnostic.setloclist {} end
+end
+vim.keymap.set('n', '<leader>Q', open_diagnostics_quickfix_error_only, { desc = 'Open diagnostic [Q]uickfix list' })
 vim.keymap.set('n', '<leader>q', open_diagnostics_quickfix, { desc = 'Open diagnostic [Q]uickfix list (error only)' })
 
 -- Autocmd to automatically jump to the location list entry on cursor movement within the loclist
@@ -207,9 +229,14 @@ vim.api.nvim_create_autocmd('CursorMoved', {
     local current_win_id = vim.api.nvim_get_current_win()
     for _, win_info in pairs(vim.fn.getwininfo()) do
       if win_info.winid == current_win_id then
-        if win_info.quickfix == 1 then
+        if win_info.loclist == 1 then
           vim.cmd('ll ' .. vim.fn.line '.')
           vim.cmd 'wincmd p'
+        else
+          if win_info.quickfix == 1 then
+            vim.cmd('cc ' .. vim.fn.line '.')
+            vim.cmd 'wincmd p'
+          end
         end
       end
     end
@@ -538,7 +565,7 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
       vim.keymap.set('n', '<leader>sf', find_project_files, { desc = '[S]earch [F]iles' })
       vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
-      vim.keymap.set({ 'n', 'v' }, '<leader>sw', grep_string_project_files, { desc = '[S]earch current [W]ord' })
+      vim.keymap.set({ 'n', 'v' }, '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
       vim.keymap.set('n', '<leader>sG', grep_args_project_files, { desc = '[S]earch by [G]rep' })
       vim.keymap.set('n', '<leader>sg', grep_project_files, { desc = '[S]earch by [G]rep' })
       vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
@@ -731,7 +758,19 @@ require('lazy').setup({
       ---@type table<string, vim.lsp.Config>
       local servers = {
         clangd = {},
-        basedpyright = {},
+        basedpyright = {
+          settings = {
+            basedpyright = {
+              analysis = {
+                diagnosticSeverityOverrides = {
+                  reportAny = false,
+                  reportExplicitAny = false,
+                  reportUnusedCallResult = false,
+                },
+              },
+            },
+          },
+        },
 
         -- gopls = {},
         -- pyright = {},
@@ -857,12 +896,10 @@ require('lazy').setup({
           -- `friendly-snippets` contains a variety of premade snippets.
           --    See the README about individual language/framework/plugin snippets:
           --    https://github.com/rafamadriz/friendly-snippets
-          -- {
-          --   'rafamadriz/friendly-snippets',
-          --   config = function()
-          --     require('luasnip.loaders.from_vscode').lazy_load()
-          --   end,
-          -- },
+          {
+            'rafamadriz/friendly-snippets',
+            config = function() require('luasnip.loaders.from_vscode').lazy_load() end,
+          },
         },
         opts = {},
       },
@@ -911,7 +948,13 @@ require('lazy').setup({
       },
 
       sources = {
-        default = { 'lsp', 'path', 'snippets' },
+        default = { 'lsp', 'path', 'snippets', 'buffer' },
+        providers = {
+          lsp = { score_offset = 0 },
+          snippets = { score_offset = 1 },
+          path = { score_offset = 3 },
+          buffer = { score_offset = -3 },
+        },
       },
 
       snippets = { preset = 'luasnip' },
